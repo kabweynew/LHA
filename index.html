@@ -2950,7 +2950,9 @@ const exEsc = s => String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<'
 const exCode = s => String(s||'').toUpperCase().replace(/[^A-Z0-9_-]/g,'');
 const exSlot = n => 's' + String(n).padStart(3,'0');
 const exPath = c => 'examonline/' + c;
-const exSubsPath = c => 'examonline/' + c + '/subs';
+// Les copies sont de simples documents de la collection « examonline » (ex : ABC123~s001) : aucune règle sur sous-collection requise
+const exSubPath = (c, id) => 'examonline/' + c + '~' + id;
+function exHash(str){ let h1 = 0xdeadbeef, h2 = 0x41c6ce57; for(let i=0;i<str.length;i++){ const ch = str.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); } h1 = Math.imul(h1 ^ (h1>>>16), 2246822507) ^ Math.imul(h2 ^ (h2>>>13), 3266489909); h2 = Math.imul(h2 ^ (h2>>>16), 2246822507) ^ Math.imul(h1 ^ (h1>>>13), 3266489909); return (4294967296 * (2097151 & h2) + (h1>>>0)).toString(36); }
 const EX_TYPES = {qcm:'Choix multiple', court:'Réponse courte', long:'Rédaction', info:'Texte / consigne'};
 const exTotalPts = ex => ex.questions.reduce((s,q)=>s+(q.type==='info' ? 0 : (Number(q.points)||0)),0);
 function exQNums(ex){ let n = 0; return ex.questions.map(q=> q.type==='info' ? null : ++n); }
@@ -2981,14 +2983,22 @@ async function exDelete(path){
   if((r.status >= 200 && r.status < 300) || r.status === 404) return true;
   throw restError(r.status, r.text, r.tried);
 }
-async function exListSubs(code){
+// Liste les documents « CODE~… » de la collection examonline. all=false : seulement les copies (s001…), all=true : + verrous de noms
+async function exListSubs(code, all){
   const out = []; let tok = '';
+  const mask = ['nom','classeId','classeNom','start','submitted','submittedAt','savedAt','answers','lockId'].map(f=>'&mask.fieldPaths=' + f).join('');
   do{
-    const r = await restCall('GET', exSubsPath(code), null, '&pageSize=300' + (tok ? '&pageToken=' + encodeURIComponent(tok) : ''));
+    const r = await restCall('GET', 'examonline', null, '&pageSize=300' + mask + (tok ? '&pageToken=' + encodeURIComponent(tok) : ''));
     if(r.status === 404) break;
     if(r.status !== 200) throw restError(r.status, r.text, r.tried);
     const j = JSON.parse(r.text);
-    (j.documents||[]).forEach(d=>{ const o = fieldsToObj(d.fields); o._id = d.name.split('/').pop(); out.push(o); });
+    (j.documents||[]).forEach(d=>{
+      const id = d.name.split('/').pop();
+      if(!id.startsWith(code + '~')) return;
+      const rest = id.slice(code.length + 1);
+      if(!all && rest.charAt(0) !== 's') return;
+      const o = fieldsToObj(d.fields); o._id = rest; out.push(o);
+    });
     tok = j.nextPageToken || '';
   }while(tok);
   return out;
@@ -3223,8 +3233,8 @@ async function exDeleteExam(id){
   if(!confirm('Supprimer « ' + ex.titre + ' » ' + (ex.statut==='brouillon' ? '?' : 'et TOUTES les copies des élèves ? Action irréversible.'))) return;
   try{
     if(ex.statut !== 'brouillon'){
-      const subs = await exListSubs(ex.code);
-      for(const s of subs) await exDelete(exSubsPath(ex.code) + '/' + s._id);
+      const subs = await exListSubs(ex.code, true);
+      for(const s of subs) await exDelete(exSubPath(ex.code, s._id));
       await exDelete(exPath(ex.code));
     }
     EXAMS_OL = EXAMS_OL.filter(e=>e.id!==id); renderExamOL(); scheduleSave();
@@ -3321,7 +3331,7 @@ function exSetGrade(sid, qid, val, max){
 async function exFreeSlot(sid){
   const ex = EXAMS_OL.find(e=>e.id===exResId); const s = exResSubs.find(x=>x._id===sid); if(!ex || !s) return;
   if(!confirm('Supprimer la copie de ' + s.nom + ' et libérer sa place ? L\'élève pourra se reconnecter.')) return;
-  try{ await exDelete(exSubsPath(ex.code) + '/' + sid); if(ex.grades) delete ex.grades[sid]; scheduleSave(); await exRefreshResults(); }
+  try{ await exDelete(exSubPath(ex.code, sid)); if(s.lockId) await exDelete(exSubPath(ex.code, s.lockId)); if(ex.grades) delete ex.grades[sid]; scheduleSave(); await exRefreshResults(); }
   catch(e){ alert('Impossible : ' + (e.friendly || e.message)); }
 }
 function exExportXlsx(){
@@ -3412,19 +3422,32 @@ async function exStart(){
     if(!fresh) return fail('Cet examen n\'existe plus.');
     const ex = fieldsToObj(fresh.fields);
     if(ex.statut !== 'ouvert') return fail('Cet examen vient d\'être fermé.');
-    const subs = await exListSubs(code);
-    const key = normName(nom) + '|' + classeId;
-    if(subs.some(s=>normName(s.nom) + '|' + s.classeId === key)) return fail('Ce nom est déjà inscrit dans cette classe. Si c\'est bien vous, demandez au professeur de libérer votre place.');
-    const used = new Set(subs.map(s=>s._id));
+    const key = normName(nom) + '|' + classeId, lockId = 'n~' + exHash(key);
     const token = Math.random().toString(36).slice(2) + Date.now().toString(36);
     const start = new Date().toISOString();
+    // 1) verrou « nom + classe » : empêche une 2e inscription du même élève
+    let myTok = null; try{ const lk = JSON.parse(localStorage.getItem('exOLlock') || 'null'); if(lk && lk.id === code + '~' + lockId) myTok = lk.token; }catch(e){}
+    const lk = await exPatch(exSubPath(code, lockId), {nom, classeId, at: start, token}, null, true);
+    if(lk === 'exists'){
+      const cur = await exGet(exSubPath(code, lockId));
+      const curTok = cur ? fieldsToObj(cur.fields).token : null;
+      if(!(myTok && curTok === myTok)) return fail('Ce nom est déjà inscrit dans cette classe. Si c\'est bien vous, demandez au professeur de libérer votre place.');
+    } else { try{ localStorage.setItem('exOLlock', JSON.stringify({id: code + '~' + lockId, token})); }catch(e){} }
+    const unlock = ()=>exDelete(exSubPath(code, lockId)).catch(()=>{});
+    // 2) réservation d'une place numérotée (création atomique : jamais plus de « max » élèves)
     let slot = null;
-    for(let n=1; n<=ex.max; n++){
-      const id = exSlot(n); if(used.has(id)) continue;
-      const res = await exPatch(exSubsPath(code) + '/' + id, {nom, classeId, classeNom, start, token, submitted:false, answers:{}, savedAt:start}, null, true);
-      if(res === true){ slot = id; break; }
-    }
-    if(!slot) return fail('Désolé, le nombre maximum d\'élèves est atteint (' + ex.max + ').');
+    try{
+      for(let n=1; n<=ex.max && !slot; n+=20){
+        const ids = []; for(let k=n; k<Math.min(ex.max, n+19)+1; k++) ids.push(exSlot(k));
+        const taken = await Promise.all(ids.map(id=>exGet(exSubPath(code, id)).then(d=>!!d)));
+        for(let k=0; k<ids.length && !slot; k++){
+          if(taken[k]) continue;
+          const res = await exPatch(exSubPath(code, ids[k]), {nom, classeId, classeNom, start, token, lockId, submitted:false, answers:{}, savedAt:start}, null, true);
+          if(res === true) slot = ids[k];
+        }
+      }
+    }catch(e){ await unlock(); throw e; }
+    if(!slot){ await unlock(); return fail('Désolé, le nombre maximum d\'élèves est atteint (' + ex.max + ').'); }
     exSt.exam = ex; exSt.answers = {};
     exSt.sess = {code, slot, token, nom, classeId, classeNom, start, duree: ex.duree||0, answers:{}};
     exPersist(); exRenderExam();
@@ -3434,7 +3457,7 @@ function exPersist(){ try{ exSt.sess.answers = exSt.answers; localStorage.setIte
 async function exResume(s){
   exBody().innerHTML = '<div class="ex-card"><p class="subtle">Reprise de votre examen…</p></div>';
   try{
-    const [e, sd] = await Promise.all([exGet(exPath(s.code)), exGet(exSubsPath(s.code) + '/' + s.slot)]);
+    const [e, sd] = await Promise.all([exGet(exPath(s.code)), exGet(exSubPath(s.code, s.slot))]);
     const sub = sd ? fieldsToObj(sd.fields) : null;
     if(!e || !sub || sub.token !== s.token){ try{ localStorage.removeItem(EX_LS); }catch(x){} exRenderJoin(); return; }
     if(sub.submitted){ try{ localStorage.removeItem(EX_LS); }catch(x){} exSt.sess = s; exRenderDone(); return; }
@@ -3484,7 +3507,7 @@ async function exSave(){
   const s = exSt.sess; if(!s || exSt.submitting || exSt.finished) return;
   const st = document.getElementById('exSaveSt');
   try{
-    await exPatch(exSubsPath(s.code) + '/' + s.slot, {answers: exSt.answers, savedAt: new Date().toISOString()}, ['answers','savedAt']);
+    await exPatch(exSubPath(s.code, s.slot), {answers: exSt.answers, savedAt: new Date().toISOString()}, ['answers','savedAt']);
     exSt.dirty = false; if(st) st.textContent = '✓ Enregistré à ' + fmtT(new Date());
   }catch(e){ if(st) st.textContent = '⚠ Pas de connexion — vos réponses sont gardées sur cet appareil, ne fermez pas la page.'; }
 }
@@ -3497,7 +3520,7 @@ async function exSubmit(auto){
   exSt.submitting = true;
   try{
     const now = new Date().toISOString();
-    await exPatch(exSubsPath(s.code) + '/' + s.slot, {answers: exSt.answers, submitted:true, submittedAt: now, savedAt: now}, ['answers','submitted','submittedAt','savedAt']);
+    await exPatch(exSubPath(s.code, s.slot), {answers: exSt.answers, submitted:true, submittedAt: now, savedAt: now}, ['answers','submitted','submittedAt','savedAt']);
     exSt.finished = true; clearInterval(exSt.timer); clearInterval(exSt.saveTimer);
     try{ localStorage.removeItem(EX_LS); }catch(e){}
     exRenderDone(auto);
