@@ -3031,7 +3031,7 @@ function exVisible(){ return EXAMS_OL.filter(e=> !currentUser || currentUser.rol
 function renderExamOL(){
   const tb = document.getElementById('exolBody'); if(!tb || !currentUser) return;
   const tpl = document.getElementById('exolTpl');
-  if(tpl) tpl.innerHTML = EXAMS_OL.some(e=>e.tplId==='english1') ? '' : `<div class="panel" style="border-left:4px solid var(--accent);display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:16px;"><div><b>English Exam 1</b> — prêt à l'emploi<div class="subtle">3 activités · 20 points · carte, images, correction automatique partielle</div></div><button class="btn accent" onclick="exAddTemplate()">+ Ajouter cet examen</button></div>`;
+  if(tpl) tpl.innerHTML = [['english1','English Exam 1'],['english2','English Exam 2']].filter(t=>!EXAMS_OL.some(e=>e.tplId===t[0])).map(t=>`<div class="panel" style="border-left:4px solid var(--accent);display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:16px;"><div><b>${t[1]}</b> — prêt à l'emploi<div class="subtle">3 activités · 20 points · carte, images, correction automatique partielle</div></div><button class="btn accent" onclick="exAddTemplate('${t[0]}')">+ Ajouter cet examen</button></div>`).join('');
   const list = exVisible();
   document.getElementById('exolCount').textContent = list.length + ' examen(s) en ligne';
   const badge = {brouillon:['neutral','Brouillon'], ouvert:['success','Ouvert'], ferme:['warn','Fermé']};
@@ -3618,7 +3618,7 @@ function exTemplateEnglish1(){
     q('a1q3', 'Arrow 3 — write the direction.', 1, 'take the second right; turn right'),
     q('a1q4', 'Arrow 4 — write the direction.', 1, 'go straight on; go past'),
     q('a1q5', 'Arrow 5 — write the direction.', 1, 'take the first right; turn right'),
-    q('a1q6', '6. The library is ______ (say where it is).', 2, ''),
+    q('a1q6', '6. The library is ______ (say where it is).', 2, 'on the left; left; the left; on left'),
     q('a1q7', '6. …opposite the ______ .', 1, 'café; cafe; the café; the cafe; school; the school'),
     info('a2i', "ACTIVITY 2 — DAILY ROUTINE (7 marks)\nLook at the pictures. Write the action. Number 0 is an example.\n\n0. get up (example)", I.p0),
     q('a2q1', 'Picture 1 — write the action.', 1, 'write; writing; write a diary; write in a diary; do homework; do my homework; write in a notebook; write a letter', I.p1),
@@ -3632,10 +3632,11 @@ function exTemplateEnglish1(){
     q('a3q1', 'Sentence 1', 1, ''), q('a3q2', 'Sentence 2', 1, ''), q('a3q3', 'Sentence 3', 1, ''), q('a3q4', 'Sentence 4', 1, ''), q('a3q5', 'Sentence 5', 1, '')
   ];
 }
-function exAddTemplate(){
-  if(EXAMS_OL.some(e=>e.tplId==='english1')) return;
+function exAddTemplate(tplId){
+  tplId = tplId === 'english2' ? 'english2' : 'english1';
+  if(EXAMS_OL.some(e=>e.tplId===tplId)) return;
   let code; do{ code = exGenCode(); }while(EXAMS_OL.some(e=>e.code===code));
-  const ex = {id: uid('xo'), tplId:'english1', titre:'English Exam 1', matiere:'English', classeIds:[], max:30, duree:60, code, statut:'brouillon',
+  const ex = {id: uid('xo'), tplId, titre: tplId==='english2' ? 'English Exam 2' : 'English Exam 1', matiere:'English', classeIds:[], max:30, duree:60, code, statut:'brouillon',
     questions: exTemplateEnglish1(), grades:{}, auteur: currentUser.nom, auteurId: currentUser.id, created: todayStr()};
   EXAMS_OL.push(ex); renderExamOL(); scheduleSave();
   openExamBuilder(ex.id);
