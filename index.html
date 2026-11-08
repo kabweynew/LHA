@@ -337,6 +337,12 @@
   .ex-chk{display:inline-flex !important;gap:6px;align-items:center;margin:4px 12px 4px 0 !important;font-weight:400 !important;}
   .ex-code{font-family:monospace;font-weight:700;letter-spacing:1px;background:var(--accent-soft);color:#8A5322;padding:2px 8px;border-radius:4px;}
   .ex-img{max-width:100%;height:auto;border:1px solid var(--line);border-radius:4px;margin:8px 0;display:block;}
+  .ex-sug{max-height:230px;overflow:auto;border:1px solid var(--line);border-radius:5px;margin-top:6px;background:#fff;}
+  .ex-sugi{padding:12px;border-bottom:1px solid var(--line);cursor:pointer;font-size:14px;}
+  .ex-sugi:last-child{border-bottom:0;} .ex-sugi:active,.ex-sugi:hover{background:var(--accent-soft);}
+  .ex-row{cursor:pointer;} .ex-row:hover td{background:#FBFAF7;}
+  .ex-chip{display:inline-block;padding:5px 12px;border:1px solid var(--line);border-radius:14px;font-size:12px;cursor:pointer;margin-right:6px;background:#fff;}
+  .ex-chip.on{background:var(--ink);color:#fff;border-color:var(--ink);}
   .ex-ans{background:#FBFAF7;border:1px solid var(--line);border-radius:4px;padding:8px 10px;font-size:13px;white-space:pre-wrap;margin:6px 0;}
 </style>
 </head>
@@ -2508,7 +2514,7 @@ function setDb(id){ try{ localStorage.setItem(dbKey(), id); }catch(e){} }
 function dbCandidates(){ const c = fsCfg(); return [...new Set([c.databaseId, curDb(), '(default)', 'default'].filter(Boolean))]; }
 function docUrl(path, dbId){
   const c = fsCfg();
-  return `https://firestore.googleapis.com/v1/projects/${c.projectId}/databases/${encodeURIComponent(dbId || curDb())}/documents/${path}?key=${encodeURIComponent(c.apiKey)}`;
+  return `https://firestore.googleapis.com/v1/projects/${c.projectId}/databases/${encodeURIComponent(dbId || curDb())}/documents${path.charAt(0) === ':' ? '' : '/'}${path}?key=${encodeURIComponent(c.apiKey)}`;
 }
 function isDbMissing(status, text){
   if(status !== 404) return false;
@@ -2983,24 +2989,23 @@ async function exDelete(path){
   if((r.status >= 200 && r.status < 300) || r.status === 404) return true;
   throw restError(r.status, r.text, r.tried);
 }
-// Liste les documents « CODE~… » de la collection examonline. all=false : seulement les copies (s001…), all=true : + verrous de noms
-async function exListSubs(code, all){
-  const out = []; let tok = '';
-  const mask = ['nom','classeId','classeNom','start','submitted','submittedAt','savedAt','answers','lockId'].map(f=>'&mask.fieldPaths=' + f).join('');
-  do{
-    const r = await restCall('GET', 'examonline', null, '&pageSize=300' + mask + (tok ? '&pageToken=' + encodeURIComponent(tok) : ''));
-    if(r.status === 404) break;
+// Lit les copies s001…sNNN de l'examen. Utilise « batchGet » (lecture de documents connus) : aucune règle de LISTE n'est nécessaire.
+async function exListSubs(ex){
+  const cfg = fsCfg(), db = curDb(), code = ex.code;
+  const top = Math.min(500, Math.max(Number(ex.max)||0, Number(ex.maxEver)||0, 1));
+  const base = 'projects/' + cfg.projectId + '/databases/' + db + '/documents/';
+  const chunks = [];
+  for(let n=1; n<=top; n+=100){ const names = []; for(let k=n; k<=Math.min(top, n+99); k++) names.push(base + exSubPath(code, exSlot(k))); chunks.push(names); }
+  const out = [];
+  const results = await Promise.all(chunks.map(async names=>{
+    const r = await restCall('POST', ':batchGet', {documents: names, mask: {fieldPaths: ['nom','classeId','classeNom','start','submitted','submittedAt','savedAt','answers','lockId']}});
     if(r.status !== 200) throw restError(r.status, r.text, r.tried);
-    const j = JSON.parse(r.text);
-    (j.documents||[]).forEach(d=>{
-      const id = d.name.split('/').pop();
-      if(!id.startsWith(code + '~')) return;
-      const rest = id.slice(code.length + 1);
-      if(!all && rest.charAt(0) !== 's') return;
-      const o = fieldsToObj(d.fields); o._id = rest; out.push(o);
-    });
-    tok = j.nextPageToken || '';
-  }while(tok);
+    return JSON.parse(r.text);
+  }));
+  results.forEach(arr=>(arr||[]).forEach(it=>{
+    if(!it.found) return;
+    const id = it.found.name.split('/').pop(); const o = fieldsToObj(it.found.fields); o._id = id.slice(code.length + 1); out.push(o);
+  }));
   return out;
 }
 
@@ -3038,12 +3043,12 @@ function renderExamOL(){
     else {
       act += `<button class="btn sm primary" onclick="exOpenResults('${e.id}')">Résultats</button> `;
       act += e.statut === 'ouvert' ? `<button class="btn sm" onclick="exSetStatus('${e.id}','ferme')">Fermer</button> ` : `<button class="btn sm" onclick="exSetStatus('${e.id}','ouvert')">Rouvrir</button> `;
-      act += `<button class="btn sm" onclick="exShare('${e.id}')">Partager</button> <button class="btn sm" onclick="exChangeMax('${e.id}')">Places</button> `;
+      act += `<button class="btn sm" onclick="exShare('${e.id}')">Partager</button> <button class="btn sm" onclick="exQuickExcel('${e.id}')">⬇ Excel</button> <button class="btn sm" onclick="exChangeMax('${e.id}')">Places</button> <button class="btn sm" onclick="exRefreshRoster('${e.id}')" title="Mettre à jour la liste des noms proposés aux élèves">Noms</button> `;
     }
     act += `<button class="btn sm" onclick="exDeleteExam('${e.id}')">Supprimer</button>`;
     return `<tr><td><b>${exEsc(e.titre)}</b><div class="subtle">${exEsc(e.matiere||'')} · ${e.questions.filter(q=>q.type!=='info').length} question(s) · ${exFmt(exTotalPts(e))} pts · ${e.duree ? e.duree + ' min' : 'sans limite'}</div></td>
       <td>${exEsc(cls)}</td><td><span class="ex-code">${exEsc(e.code)}</span></td><td>${e.max}</td>
-      <td><span class="badge ${b[0]}">${b[1]}</span></td><td style="white-space:nowrap;">${act}</td></tr>`;
+      <td><span class="badge ${b[0]}">${b[1]}</span></td><td style="min-width:170px;">${act}</td></tr>`;
   }).join('') : emptyRow(6, 'Aucun examen en ligne. Cliquez sur « + Nouvel examen en ligne ».');
 }
 
@@ -3051,7 +3056,7 @@ function renderExamOL(){
 function openExamBuilder(id){
   const ex = id ? EXAMS_OL.find(e=>e.id===id) : null;
   exDraft = ex ? JSON.parse(JSON.stringify(ex)) : {
-    id: uid('xo'), titre:'', matiere: (isTeacher() ? teacherSubject() : ''), classeIds:[], max:30, duree:60,
+    id: uid('xo'), titre:'', matiere: (isTeacher() ? teacherSubject() : ''), classeIds:[], max:30, duree:60, nomMode:'suggest',
     code: exGenCode(), statut:'brouillon', questions:[], grades:{}, auteur: currentUser.nom, auteurId: currentUser.id, created: todayStr(), isNew:true
   };
   exRenderBuilder(); openModal('modalExamOL');
@@ -3065,7 +3070,7 @@ function exMoveQ(i,d){ const j=i+d; if(j<0||j>=exDraft.questions.length) return;
 function exQType(i,t){ const q=exDraft.questions[i]; q.type=t; q.points = t==='info' ? 0 : (q.points>0 ? q.points : 1); if(t==='qcm' && q.options.length<2) q.options=['','']; exRenderBuilder(); }
 function exAddOpt(i){ const q=exDraft.questions[i]; if(q.options.length>=6){ alert('6 options maximum.'); return; } q.options.push(''); exRenderBuilder(); }
 function exDelOpt(i,j){ const q=exDraft.questions[i]; if(q.options.length<=2) return; q.options.splice(j,1); if(q.correct===j) q.correct=0; else if(q.correct>j) q.correct--; exRenderBuilder(); }
-function exToggleClass(cid,on){ const s=new Set(exDraft.classeIds); on ? s.add(cid) : s.delete(cid); exDraft.classeIds=[...s]; }
+function exToggleClass(cid,on){ const s=new Set(exDraft.classeIds); on ? s.add(cid) : s.delete(cid); exDraft.classeIds=[...s]; exRenderBuilder(); }
 function exPickImg(i, inp){
   const f = inp.files && inp.files[0]; if(!f) return;
   const rd = new FileReader();
@@ -3118,6 +3123,13 @@ function exRenderBuilder(){
       <div><label>Mot de passe unique</label><input type="text" value="${exEsc(d.code)}" style="text-transform:uppercase" onchange="exDraft.code=exCode(this.value);this.value=exDraft.code"></div>
     </div>
     <div style="margin-top:4px;"><button class="btn sm" onclick="exDraft.code=exGenCode();exRenderBuilder()">🎲 Générer un mot de passe</button></div>
+    <label>Noms des élèves</label>
+    <select onchange="exDraft.nomMode=this.value">
+      <option value="suggest" ${(d.nomMode||'suggest')==='suggest'?'selected':''}>Proposer la liste de la classe (l'élève clique sur son nom)</option>
+      <option value="strict" ${d.nomMode==='strict'?'selected':''}>Obligatoire : seuls les noms de la liste sont acceptés</option>
+      <option value="free" ${d.nomMode==='free'?'selected':''}>Libre : l'élève écrit ses 3 noms</option>
+    </select>
+    <div class="subtle" style="margin-top:4px;">${d.classeIds.length ? exRoster(d).length + ' élève(s) enregistrés dans les classes choisies (menu Élèves).' : 'Choisissez les classes pour voir le nombre d\'élèves.'}${(d.nomMode==='strict' && d.classeIds.length && !exRoster(d).length) ? ' <b>Aucun élève enregistré : le mode « obligatoire » ne peut pas s\'appliquer.</b>' : ''}</div>
     <label style="margin-top:18px;">Questions · total ${exFmt(exTotalPts(d))} pts</label>
     ${qs}
     <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
@@ -3157,7 +3169,7 @@ function exPublicDoc(ex, statut){
   return {
     id: ex.id, titre: ex.titre, matiere: ex.matiere||'',
     classes: ex.classeIds.map(cid=>({id: cid, nom: classeNomById(cid)})),
-    max: Number(ex.max), duree: Number(ex.duree)||0, statut,
+    max: Number(ex.max), duree: Number(ex.duree)||0, statut, nomMode: ex.nomMode || 'suggest', eleves: exRoster(ex),
     questions: ex.questions.map(q=>({id:q.id, type:q.type, texte:q.texte, points: q.type==='info' ? 0 : Number(q.points), options: q.type==='qcm' ? q.options : [], img: q.img || ''})),
     publishedAt: new Date().toISOString()
   };
@@ -3170,7 +3182,7 @@ async function exPublish(id){
     const cur = await exGet(exPath(ex.code));
     if(cur && fieldsToObj(cur.fields).id !== ex.id){ alert('Ce mot de passe est déjà utilisé par un autre examen. Modifiez le brouillon et choisissez-en un autre.'); return; }
     await restSetDoc(exPath(ex.code), exPublicDoc(ex, 'ouvert'));
-    ex.statut = 'ouvert'; renderExamOL(); scheduleSave();
+    ex.statut = 'ouvert'; ex.maxEver = Math.max(ex.maxEver||0, Number(ex.max)||0); renderExamOL(); scheduleSave();
     exShare(id);
   }catch(e){ alert('Publication impossible : ' + (e.friendly || e.message) + '\n\nVérifiez que les règles Firestore autorisent la collection « examonline ».'); }
 }
@@ -3183,7 +3195,30 @@ async function exChangeMax(id){
   const ex = EXAMS_OL.find(e=>e.id===id); if(!ex) return;
   const v = prompt('Nombre maximum d\'élèves pour cet examen :', ex.max); if(v===null) return;
   const n = parseInt(v); if(!(n>=1 && n<=500)){ alert('Entrez un nombre entre 1 et 500.'); return; }
-  try{ await exPatch(exPath(ex.code), {max: n}, ['max']); ex.max = n; renderExamOL(); scheduleSave(); }
+  try{ await exPatch(exPath(ex.code), {max: n}, ['max']); ex.max = n; ex.maxEver = Math.max(ex.maxEver||0, n); renderExamOL(); scheduleSave(); }
+  catch(e){ alert('Impossible : ' + (e.friendly || e.message)); }
+}
+// Liste des élèves (module Élèves de l'app) des classes de l'examen : proposée aux élèves au moment de saisir leur nom
+function exRoster(ex){ return ELEVES.filter(e=>(ex.classeIds||[]).includes(e.classeId) && e.nom).map(e=>({n:String(e.nom).trim(), c:e.classeId})).slice(0,600); }
+function exAbsents(ex){ const seen = new Set(exResSubs.map(s=>normName(s.nom) + '|' + s.classeId)); return exRoster(ex).filter(r=>!seen.has(normName(r.n) + '|' + r.c)); }
+function exTimeInfo(ex, s){
+  const st = new Date(s.start).getTime(); if(!isFinite(st)) return {mins:0, live:false, over:false};
+  if(s.submitted){ const en = s.submittedAt ? new Date(s.submittedAt).getTime() : st; return {mins: Math.max(0, Math.round((en - st)/60000)), live:false, over:false}; }
+  const m = Math.max(0, Math.round((Date.now() - st)/60000)); return {mins: m, live:true, over: !!ex.duree && m > ex.duree};
+}
+const exHM = iso => { const d = new Date(iso); return isFinite(d) ? d.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'}) : '—'; };
+const exDT = iso => { const d = new Date(iso); return isFinite(d) ? d.toLocaleString('fr-FR') : ''; };
+let exResFilter = 'all';
+async function exQuickExcel(id){
+  const ex = EXAMS_OL.find(e=>e.id===id); if(!ex) return;
+  try{ exResId = id; exResSubs = await exListSubs(ex); exExportXlsx(); }
+  catch(e){ alert('Lecture impossible : ' + (e.friendly || e.message)); }
+}
+async function exRefreshRoster(id){
+  const ex = EXAMS_OL.find(e=>e.id===id); if(!ex) return;
+  const r = exRoster(ex);
+  if(!confirm('Envoyer aux élèves la liste à jour des noms (' + r.length + ' élève(s) des classes de cet examen) ?')) return;
+  try{ await exPatch(exPath(ex.code), {eleves: r, nomMode: ex.nomMode || 'suggest'}, ['eleves','nomMode']); alert('Liste mise à jour : ' + r.length + ' nom(s).'); }
   catch(e){ alert('Impossible : ' + (e.friendly || e.message)); }
 }
 let exShareId = null, exShareWithCode = true;
@@ -3233,8 +3268,8 @@ async function exDeleteExam(id){
   if(!confirm('Supprimer « ' + ex.titre + ' » ' + (ex.statut==='brouillon' ? '?' : 'et TOUTES les copies des élèves ? Action irréversible.'))) return;
   try{
     if(ex.statut !== 'brouillon'){
-      const subs = await exListSubs(ex.code, true);
-      for(const s of subs) await exDelete(exSubPath(ex.code, s._id));
+      const subs = await exListSubs(ex);
+      for(const s of subs){ await exDelete(exSubPath(ex.code, s._id)); if(s.lockId) await exDelete(exSubPath(ex.code, s.lockId)); }
       await exDelete(exPath(ex.code));
     }
     EXAMS_OL = EXAMS_OL.filter(e=>e.id!==id); renderExamOL(); scheduleSave();
@@ -3268,30 +3303,37 @@ async function exOpenResults(id){
   openModal('modalExamRes');
   await exRefreshResults();
   clearInterval(exResTimer);
-  exResTimer = setInterval(()=>{ if(exDetailId===null) exRefreshResults(); }, 20000);
+  exResTimer = setInterval(()=>{ if(exDetailId===null) exRefreshResults(); }, 15000);
 }
 function exCloseResults(){ clearInterval(exResTimer); exResTimer = null; closeModal('modalExamRes'); }
 async function exRefreshResults(){
   const ex = EXAMS_OL.find(e=>e.id===exResId); if(!ex) return;
-  try{ exResSubs = await exListSubs(ex.code); }
+  try{ exResSubs = await exListSubs(ex); }
   catch(e){ document.getElementById('examResBody').innerHTML = '<p class="login-error" style="display:block">Lecture impossible : ' + exEsc(e.friendly||e.message) + '</p><button class="btn" onclick="exCloseResults()">Fermer</button>'; return; }
   exRenderResults();
 }
 function exRenderResults(){
   const ex = EXAMS_OL.find(e=>e.id===exResId); if(!ex) return;
-  const subs = exResSubs.slice().sort((a,b)=> (a.classeNom||'').localeCompare(b.classeNom||'') || (a.nom||'').localeCompare(b.nom||''));
-  const done = subs.filter(s=>s.submitted).length;
+  const all = exResSubs.slice().sort((a,b)=> (a.classeNom||'').localeCompare(b.classeNom||'') || (a.nom||'').localeCompare(b.nom||''));
+  const done = all.filter(s=>s.submitted).length, live = all.length - done, abs = exAbsents(ex);
+  const subs = all.filter(s=> exResFilter==='all' || (exResFilter==='done' ? s.submitted : !s.submitted));
   const rows = subs.map(s=>{
-    const sc = exScore(ex, s);
-    return `<tr><td>${exEsc(s.nom)}</td><td>${exEsc(s.classeNom)}</td>
+    const sc = exScore(ex, s), t = exTimeInfo(ex, s);
+    const tm = t.live ? `<span style="${t.over?'color:#B3402F;font-weight:700;':''}">⏱ ${t.mins} min</span>${ex.duree ? '<span class="subtle"> / ' + ex.duree + '</span>' : ''}` : `${t.mins} min`;
+    return `<tr class="ex-row" onclick="exShowDetail('${s._id}')"><td><b>${exEsc(s.nom)}</b><div class="subtle">Début ${exHM(s.start)}</div></td><td>${exEsc(s.classeNom)}</td>
       <td>${s.submitted ? '<span class="badge success">Rendu</span>' : '<span class="badge warn">En cours</span>'}</td>
+      <td>${tm}</td>
       <td><b>${exFmt(sc.note)}</b>/20 <span class="subtle">(${exFmt(sc.tot)}/${exFmt(exTotalPts(ex))})</span>${sc.pend ? ' <span class="badge warn">à corriger</span>' : ''}</td>
-      <td style="white-space:nowrap;"><button class="btn sm" onclick="exShowDetail('${s._id}')">Copie</button> <button class="btn sm" onclick="exFreeSlot('${s._id}')">Libérer</button></td></tr>`;
-  }).join('') || emptyRow(5, 'Aucun élève connecté pour le moment.');
+      <td style="white-space:nowrap;"><button class="btn sm primary" onclick="event.stopPropagation();exShowDetail('${s._id}')">${s.submitted ? 'Voir la copie' : 'Suivre'}</button> <button class="btn sm" onclick="event.stopPropagation();exFreeSlot('${s._id}')">Libérer</button></td></tr>`;
+  }).join('') || emptyRow(6, all.length ? 'Aucun élève dans ce filtre.' : 'Aucun élève connecté pour le moment.');
+  const chip = (k,l) => `<span class="ex-chip ${exResFilter===k?'on':''}" onclick="exResFilter='${k}';exRenderResults()">${l}</span>`;
   document.getElementById('examResBody').innerHTML = `
     <h3>${exEsc(ex.titre)} — résultats</h3>
-    <div class="kpi-strip"><div><b>${subs.length}/${ex.max}</b>places prises</div><div><b>${done}</b>copie(s) rendue(s)</div><div><b>${subs.length-done}</b>en cours</div></div>
-    <table><thead><tr><th>Élève</th><th>Classe</th><th>État</th><th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="kpi-strip"><div><b>${all.length}/${ex.max}</b>connectés (places prises)</div><div><b>${live}</b>en cours</div><div><b>${done}</b>copie(s) rendue(s)</div>${exRoster(ex).length ? `<div><b>${abs.length}</b>pas encore connectés</div>` : ''}</div>
+    <div style="margin:10px 0;">${chip('all','Tous (' + all.length + ')')}${chip('live','En cours (' + live + ')')}${chip('done','Rendus (' + done + ')')}</div>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Élève</th><th>Classe</th><th>État</th><th>Temps</th><th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${abs.length ? `<details style="margin-top:12px;"><summary class="subtle" style="cursor:pointer;">Pas encore connectés (${abs.length})</summary><div style="margin-top:6px;font-size:13px;">${abs.map(a=>exEsc(a.n) + ' <span class="subtle">· ' + exEsc(classeNomById(a.c)) + '</span>').join('<br>')}</div></details>` : ''}
+    <div class="subtle" style="margin-top:10px;">Actualisation automatique toutes les 15 secondes. Cliquez sur un élève pour voir sa copie.</div>
     <div class="modal-actions"><button class="btn" onclick="exRefreshResults()">⟳ Actualiser</button><button class="btn" onclick="exExportXlsx()">⬇ Excel</button><button class="btn primary" onclick="exCloseResults()">Fermer</button></div>`;
 }
 function exShowDetail(sid){
@@ -3317,7 +3359,8 @@ function exRenderDetail(){
   }).join('');
   document.getElementById('examResBody').innerHTML = `
     <h3>${exEsc(s.nom)} <span class="subtle">· ${exEsc(s.classeNom)}</span></h3>
-    <div class="kpi-strip"><div><b>${exFmt(sc.note)}/20</b>note</div><div><b>${s.submitted ? 'Rendu' : 'En cours'}</b>état</div></div>
+    <div class="kpi-strip"><div><b>${exFmt(sc.note)}/20</b>note</div><div><b>${s.submitted ? 'Rendu' : 'En cours'}</b>état</div><div><b>${exTimeInfo(ex, s).mins} min</b>${s.submitted ? 'temps passé' : 'depuis le début'}</div><div><b>${exHM(s.start)}${s.submitted ? ' → ' + exHM(s.submittedAt) : ''}</b>horaires</div></div>
+    ${s.submitted ? '' : '<div class="warn-note">Cet élève n\'a pas encore rendu sa copie : les réponses affichées sont celles enregistrées automatiquement.</div>'}
     ${qs}
     <div class="modal-actions"><button class="btn primary" onclick="exDetailId=null;exRenderResults()">← Retour à la liste</button></div>`;
 }
@@ -3336,15 +3379,21 @@ async function exFreeSlot(sid){
 }
 function exExportXlsx(){
   const ex = EXAMS_OL.find(e=>e.id===exResId); if(!ex) return;
+  if(typeof XLSX === 'undefined'){ alert('Export Excel indisponible : la bibliothèque Excel n\'a pas pu être chargée (connexion requise).'); return; }
   const qs = ex.questions.filter(q=>q.type!=='info'), nums = exQNums(ex).filter(Boolean);
-  const head = ['Nom','Classe','État','Points','Total','Note /20','Début','Rendu à'].concat(qs.map((q,i)=>'Q'+nums[i]+' (/'+q.points+')'));
-  const rows = exResSubs.slice().sort((a,b)=>(a.classeNom||'').localeCompare(b.classeNom||'') || (a.nom||'').localeCompare(b.nom||'')).map(s=>{
-    const sc = exScore(ex, s);
-    return [s.nom, s.classeNom, s.submitted?'Rendu':'En cours', sc.tot, exTotalPts(ex), sc.note, s.start||'', s.submittedAt||''].concat(qs.map(q=>exQScore(ex,q,s).pts));
+  const sorted = exResSubs.slice().sort((a,b)=>(a.classeNom||'').localeCompare(b.classeNom||'') || (a.nom||'').localeCompare(b.nom||''));
+  const head = ['Nom','Classe','État','Début','Rendu à','Durée (min)','Points','Total possible','Note /20'].concat(qs.map((q,i)=>'Q'+nums[i]+' (/'+q.points+')'));
+  const rows = sorted.map(s=>{
+    const sc = exScore(ex, s), t = exTimeInfo(ex, s);
+    return [s.nom, s.classeNom, s.submitted?'Rendu':'En cours', exDT(s.start), s.submitted ? exDT(s.submittedAt) : '', t.mins, sc.tot, exTotalPts(ex), sc.note].concat(qs.map(q=>exQScore(ex,q,s).pts));
   });
-  const ws = XLSX.utils.aoa_to_sheet([head].concat(rows)), wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Résultats');
-  XLSX.writeFile(wb, 'Resultats_' + ex.code + '.xlsx');
+  exAbsents(ex).forEach(a=>rows.push([a.n, classeNomById(a.c), 'Absent / non connecté', '', '', '', '', exTotalPts(ex), '']));
+  const h2 = ['Nom','Classe'].concat(qs.map((q,i)=>'Q'+nums[i]+' — '+String(q.texte).replace(/\s+/g,' ').slice(0,60)));
+  const rows2 = sorted.map(s=>[s.nom, s.classeNom].concat(qs.map(q=>{ const a=(s.answers||{})[q.id]; if(a===undefined||a===null) return ''; return q.type==='qcm' ? (q.options[Number(a)] ?? a) : a; })));
+  const wb = XLSX.utils.book_new(), ws = XLSX.utils.aoa_to_sheet([head].concat(rows)), ws2 = XLSX.utils.aoa_to_sheet([h2].concat(rows2));
+  ws['!cols'] = [{wch:28},{wch:16},{wch:20},{wch:18},{wch:18},{wch:12}]; ws2['!cols'] = [{wch:28},{wch:16}].concat(qs.map(()=>({wch:30})));
+  XLSX.utils.book_append_sheet(wb, ws, 'Résultats'); XLSX.utils.book_append_sheet(wb, ws2, 'Réponses');
+  XLSX.writeFile(wb, 'Resultats_' + String(ex.titre).replace(/[^\w\-]+/g,'_') + '_' + ex.code + '.xlsx');
 }
 
 /* ============================================================
@@ -3396,23 +3445,42 @@ async function exCheckCode(){
     exSt.exam = o; exSt.code = code; exRenderIdentity();
   }catch(e){ exErr('Connexion impossible : ' + (e.friendly || e.message)); btn.disabled = false; btn.textContent = 'Continuer'; }
 }
+function exStRoster(){ const c = (document.getElementById('exClasse')||{}).value; return (exSt.exam.eleves || []).filter(r=>r.c === c); }
 function exRenderIdentity(){
   const o = exSt.exam;
   exBody().innerHTML = `<div class="ex-card"><div class="login-brand">${exEsc(o.titre)}</div>
     <div class="login-sub">${exEsc(o.matiere||'')} · ${o.questions.filter(q=>q.type!=='info').length} question(s) · ${o.duree ? o.duree + ' minutes' : 'sans limite de temps'}</div>
-    <label>Vos 3 noms (prénom, père, grand-père)</label>
-    <input type="text" id="exNom" autocomplete="off" placeholder="ex : Ahmed Omar Hassan">
     <label>Votre classe</label>
-    <select id="exClasse"><option value="">— Choisir —</option>${(o.classes||[]).map(c=>`<option value="${exEsc(c.id)}">${exEsc(c.nom)}</option>`).join('')}</select>
+    <select id="exClasse" onchange="exSt.picked='';document.getElementById('exNom').value='';exOnNom()"><option value="">— Choisir —</option>${(o.classes||[]).map(c=>`<option value="${exEsc(c.id)}">${exEsc(c.nom)}</option>`).join('')}</select>
+    <label id="exNomLbl">Votre nom complet</label>
+    <input type="text" id="exNom" autocomplete="off" placeholder="ex : Ahmed Omar Hassan" oninput="exSt.picked='';exOnNom()" onfocus="exOnNom()">
+    <div class="ex-sug" id="exSug" style="display:none;"></div>
     <div class="login-error" id="exErr"></div>
     <div class="warn-note">Le chronomètre démarre dès que vous appuyez sur « Commencer ». Ne fermez pas la page pendant l'examen.</div>
     <button class="btn primary login-submit" id="exGoBtn" onclick="exStart()">Commencer l'examen</button></div>`;
 }
+function exOnNom(){
+  const o = exSt.exam, mode = o.nomMode || 'free', box = document.getElementById('exSug'), inp = document.getElementById('exNom');
+  const roster = exStRoster(), lbl = document.getElementById('exNomLbl');
+  if(mode === 'free' || !roster.length){ box.style.display = 'none'; lbl.textContent = mode === 'free' ? 'Vos 3 noms (prénom, père, grand-père)' : 'Votre nom complet'; return; }
+  lbl.textContent = 'Écrivez votre nom puis cliquez dessus dans la liste';
+  if(exSt.picked && normName(inp.value) === normName(exSt.picked)){ box.style.display = 'none'; return; }
+  const toks = normName(inp.value).split(' ').filter(Boolean);
+  const list = roster.filter(r=>{ const n = normName(r.n); return toks.every(t=>n.includes(t)); }).sort((a,b)=>a.n.localeCompare(b.n)).slice(0, 60);
+  exSt.sug = list;
+  box.innerHTML = list.length ? list.map((r,i)=>`<div class="ex-sugi" onclick="exPickName(${i})">${exEsc(r.n)}</div>`).join('') : '<div class="ex-sugi" style="cursor:default;color:#71798A;">Aucun nom trouvé' + (mode === 'strict' ? ' — avertissez votre professeur.' : '. Vous pouvez écrire vos 3 noms.') + '</div>';
+  box.style.display = 'block';
+}
+function exPickName(i){ const r = (exSt.sug || [])[i]; if(!r) return; exSt.picked = r.n; document.getElementById('exNom').value = r.n; document.getElementById('exSug').style.display = 'none'; exErr(''); }
 async function exStart(){
-  const nom = document.getElementById('exNom').value.trim().replace(/\s+/g,' ');
+  let nom = document.getElementById('exNom').value.trim().replace(/\s+/g,' ');
   const classeId = document.getElementById('exClasse').value;
-  if(nom.split(' ').length < MIN_NAME_WORDS){ exErr('Écrivez vos ' + MIN_NAME_WORDS + ' noms complets.'); return; }
   if(!classeId){ exErr('Choisissez votre classe.'); return; }
+  const roster = exStRoster(), mode = exSt.exam.nomMode || 'free';
+  const known = roster.find(r=>normName(r.n) === normName(nom));
+  if(known) nom = known.n;                                               // nom de la liste du professeur : accepté tel quel
+  else if(mode === 'strict' && roster.length){ exErr('Choisissez votre nom dans la liste. S\'il n\'y est pas, avertissez votre professeur.'); return; }
+  else if(nom.split(' ').length < MIN_NAME_WORDS){ exErr('Écrivez vos ' + MIN_NAME_WORDS + ' noms complets.'); return; }
   const classeNom = (exSt.exam.classes.find(c=>c.id===classeId)||{}).nom || '';
   const btn = document.getElementById('exGoBtn'); btn.disabled = true; btn.textContent = 'Inscription…'; exErr('');
   const fail = m => { exErr(m); btn.disabled = false; btn.textContent = 'Commencer l\'examen'; };
