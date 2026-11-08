@@ -3031,7 +3031,7 @@ function renderExamOL(){
       act += `<button class="btn sm" onclick="exShare('${e.id}')">Partager</button> <button class="btn sm" onclick="exChangeMax('${e.id}')">Places</button> `;
     }
     act += `<button class="btn sm" onclick="exDeleteExam('${e.id}')">Supprimer</button>`;
-    return `<tr><td><b>${exEsc(e.titre)}</b><div class="subtle">${exEsc(e.matiere||'')} · ${e.questions.length} question(s) · ${exFmt(exTotalPts(e))} pts · ${e.duree ? e.duree + ' min' : 'sans limite'}</div></td>
+    return `<tr><td><b>${exEsc(e.titre)}</b><div class="subtle">${exEsc(e.matiere||'')} · ${e.questions.filter(q=>q.type!=='info').length} question(s) · ${exFmt(exTotalPts(e))} pts · ${e.duree ? e.duree + ' min' : 'sans limite'}</div></td>
       <td>${exEsc(cls)}</td><td><span class="ex-code">${exEsc(e.code)}</span></td><td>${e.max}</td>
       <td><span class="badge ${b[0]}">${b[1]}</span></td><td style="white-space:nowrap;">${act}</td></tr>`;
   }).join('') : emptyRow(6, 'Aucun examen en ligne. Cliquez sur « + Nouvel examen en ligne ».');
@@ -3354,7 +3354,14 @@ function showExamScreen(){
   let s = null; try{ s = JSON.parse(localStorage.getItem(EX_LS) || 'null'); }catch(e){}
   if(s && s.code && s.slot) exResume(s); else exRenderJoin('', true);
 }
-function exErr(m){ const el = document.getElementById('exErr'); if(el){ el.textContent = m; el.style.display = m ? 'block' : 'none'; } }
+function exErr(m){
+  const el = document.getElementById('exErr'); if(!el) return;
+  el.textContent = m; el.style.display = m ? 'block' : 'none'; el.style.whiteSpace = 'pre-wrap';
+  if(m && /Connexion impossible/.test(m) && typeof diagLog !== 'undefined' && diagLog.length){
+    const d = document.createElement('div'); d.style.cssText = 'font-size:10.5px;color:#71798A;margin-top:8px;font-family:monospace;word-break:break-all;';
+    d.textContent = 'Détail technique :\n' + diagLog.slice(-4).join('\n'); el.appendChild(d);
+  }
+}
 function exUrlCode(){ try{ return exCode(new URLSearchParams(location.search).get('code') || ''); }catch(e){ return ''; } }
 function exRenderJoin(msg, auto){
   exBody().innerHTML = `<div class="ex-card"><div class="login-brand">Examen en ligne</div>
@@ -3382,7 +3389,7 @@ async function exCheckCode(){
 function exRenderIdentity(){
   const o = exSt.exam;
   exBody().innerHTML = `<div class="ex-card"><div class="login-brand">${exEsc(o.titre)}</div>
-    <div class="login-sub">${exEsc(o.matiere||'')} · ${o.questions.length} question(s) · ${o.duree ? o.duree + ' minutes' : 'sans limite de temps'}</div>
+    <div class="login-sub">${exEsc(o.matiere||'')} · ${o.questions.filter(q=>q.type!=='info').length} question(s) · ${o.duree ? o.duree + ' minutes' : 'sans limite de temps'}</div>
     <label>Vos 3 noms (prénom, père, grand-père)</label>
     <input type="text" id="exNom" autocomplete="off" placeholder="ex : Ahmed Omar Hassan">
     <label>Votre classe</label>
