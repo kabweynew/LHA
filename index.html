@@ -344,6 +344,18 @@
   .ex-chip{display:inline-block;padding:5px 12px;border:1px solid var(--line);border-radius:14px;font-size:12px;cursor:pointer;margin-right:6px;background:#fff;}
   .ex-chip.on{background:var(--ink);color:#fff;border-color:var(--ink);}
   .ex-ans{background:#FBFAF7;border:1px solid var(--line);border-radius:4px;padding:8px 10px;font-size:13px;white-space:pre-wrap;margin:6px 0;}
+  .ex-act{font-size:18px;font-weight:700;margin:0 0 10px;}
+  .ex-card p{margin:8px 0;font-size:15px;line-height:1.5;}
+  .ex-map{width:100%;height:auto;border-radius:12px;border:1px solid var(--line);margin:6px 0;display:block;}
+  .ex-wb{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:10px 0;font-size:14px;}
+  .ex-ol{margin:8px 0 8px 20px;padding:0;font-size:15px;line-height:1.6;}
+  .ex-li{margin:8px 0;font-size:15px;}
+  .ex-pi{border:1px solid var(--line);border-radius:8px;padding:10px 14px;font-size:16px;font-family:inherit;background:#fff;max-width:100%;box-sizing:border-box;}
+  .ex-pi:focus{outline:2px solid var(--accent);outline-offset:1px;}
+  .ex-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin:10px 0;}
+  .ex-gc{text-align:center;} .ex-gc img{width:100%;max-width:230px;border-radius:10px;border:1px solid var(--line);}
+  .ex-gc .ex-pi{width:100%;} .ex-gc .ex-gl{margin-top:4px;text-align:left;}
+  .ex-mk{font-size:12px;color:#71798A;}
 </style>
 </head>
 <body>
@@ -3536,9 +3548,40 @@ async function exResume(s){
     exBody().innerHTML = `<div class="ex-card"><p class="login-error" style="display:block">Connexion impossible : ${exEsc(err.friendly||err.message)}</p><button class="btn primary" onclick="exResume(JSON.parse(localStorage.getItem('${EX_LS}')))">Réessayer</button></div>`;
   }
 }
+/* ---------- Mise en page « English Academy » des examens modèles (clés = identifiants de questions) ---------- */
+const EX_LAY = {
+  a0i: {h:'Instructions', pre:`<p>This exam has <strong>3 activities</strong> (8 + 7 + 5 = <strong>20 marks</strong> in total).</p><ol class="ex-ol"><li>Directions on a map</li><li>Daily routine pictures</li><li>Writing: What do you do before school?</li></ol><p>Type your answers. Your teacher will correct your exam.</p>`},
+  a1i: {h:'Activity 1 — Directions (8 marks)', lay:'list', img:'map', pre:`<p>You are at <strong>START (S)</strong>. You are going to the place with the red pin. Follow the numbered arrows on the map. Write the direction for each arrow. Then say where the place is.</p>{img}<div class="ex-wb"><strong>Word bank:</strong> take the first left · turn right · go past · take the second right · turn left · go straight on · take the first right · take the second left</div>`},
+  a2i: {h:'Activity 2 — Daily routine (7 marks)', lay:'grid', img:'example', ex:'get up', pre:`<p>Look at the pictures. Write the action. Number 0 is an example.</p>`},
+  a3i: {h:'Activity 3 — Writing (5 marks)', lay:'list', pre:`<p><strong>What do you do before school?</strong> Write <strong>five</strong> sentences. Example: <em>I get up at six o'clock.</em></p>`}
+};
+const EX_ITEM = {
+  a1q1:{n:'1.'}, a1q2:{n:'2.'}, a1q3:{n:'3.'}, a1q4:{n:'4.'}, a1q5:{n:'5.'},
+  a1q6:{inl:1, pre:'<strong>6.</strong> The library is', after:',', mk:2},
+  a1q7:{inl:1, pre:'opposite the', after:'.'},
+  a2q1:{n:'1.'}, a2q2:{n:'2.'}, a2q3:{n:'3.'}, a2q4:{n:'4.'}, a2q5:{n:'5.'}, a2q6:{n:'6.'}, a2q7:{n:'7.'},
+  a3q1:{n:'1.'}, a3q2:{n:'2.'}, a3q3:{n:'3.'}, a3q4:{n:'4.'}, a3q5:{n:'5.'}
+};
+function exSection(info, items){
+  const L = EX_LAY[info.id], ans = exSt.answers || {};
+  const inp = (q, w) => `<input type="text" class="ex-pi" style="width:${w}" autocomplete="off" autocapitalize="off" spellcheck="false" value="${exEsc(ans[q.id]||'')}" oninput="exSetAns('${q.id}',this.value)">`;
+  const im = info.img ? exEsc(info.img) : '';
+  let html = `<h3 class="ex-act">${exEsc(L.h)}</h3>` + L.pre.replace('{img}', im && L.img==='map' ? `<img class="ex-map" src="${im}" alt="Map with numbered arrows">` : '');
+  if(L.lay === 'grid'){
+    let cells = `<div class="ex-gc">${im ? `<img src="${im}" alt="">` : ''}<div class="ex-gl"><strong>0.</strong> ${exEsc(L.ex||'')} <em class="ex-mk">(example)</em></div></div>`;
+    items.forEach(q=>{ const m = EX_ITEM[q.id] || {};
+      cells += `<div class="ex-gc">${q.img ? `<img src="${exEsc(q.img)}" alt="">` : ''}<div class="ex-gl"><strong>${m.n||''}</strong> ${inp(q,'100%')}</div></div>`; });
+    html += `<div class="ex-grid">${cells}</div>`;
+  } else {
+    items.forEach(q=>{ const m = EX_ITEM[q.id] || {};
+      if(m.inl) html += `<div class="ex-li">${m.pre||''} ${inp(q,'150px')} ${m.after||''}${m.mk>1 ? ` <span class="ex-mk">(${m.mk} marks)</span>` : ''}</div>`;
+      else html += `<div class="ex-li"><strong>${m.n||''}</strong> ${inp(q,'100%')}</div>`; });
+  }
+  return `<div class="ex-card">${html}</div>`;
+}
 function exRenderExam(){
   const o = exSt.exam, s = exSt.sess, nums = exQNums(o), total = nums.filter(Boolean).length;
-  const qs = o.questions.map((q,i)=>{
+  const oldCard = (q,i)=>{
     const im = q.img ? `<img class="ex-img" src="${exEsc(q.img)}" alt="">` : '';
     if(q.type==='info') return `<div class="ex-card" style="background:#FBFAF7;"><div class="ex-qtxt">${exEsc(q.texte)}</div>${im}</div>`;
     const v = exSt.answers[q.id];
@@ -3547,7 +3590,13 @@ function exRenderExam(){
     else if(q.type==='court') inp = `<input type="text" autocomplete="off" value="${exEsc(v||'')}" oninput="exSetAns('${q.id}',this.value)" placeholder="Votre réponse">`;
     else inp = `<textarea rows="6" oninput="exSetAns('${q.id}',this.value)" placeholder="Rédigez votre réponse ici">${exEsc(v||'')}</textarea>`;
     return `<div class="ex-card"><div class="ex-qnum">QUESTION ${nums[i]} / ${total} · ${exFmt(q.points)} pt${q.points>1?'s':''}</div><div class="ex-qtxt">${exEsc(q.texte)}</div>${im}${inp}</div>`;
-  }).join('');
+  };
+  const Q = o.questions; let qs = '', k = 0;
+  while(k < Q.length){
+    const q = Q[k];
+    if(q.type==='info' && EX_LAY[q.id]){ let j = k+1; while(j < Q.length && Q[j].type!=='info') j++; qs += exSection(q, Q.slice(k+1,j)); k = j; }
+    else { qs += oldCard(q,k); k++; }
+  }
   exBody().innerHTML = `<div class="ex-head"><div><b>${exEsc(o.titre)}</b><small>${exEsc(s.nom)} · ${exEsc(s.classeNom)}</small></div><div class="ex-timer" id="exTimer">—</div></div>
     ${qs}<div class="ex-save" id="exSaveSt">Vos réponses sont enregistrées automatiquement.</div>
     <button class="btn primary login-submit" onclick="exSubmit(false)">Rendre ma copie</button>`;
@@ -3612,6 +3661,7 @@ function exTemplateEnglish1(){
   const q = (id, texte, points, accept, img) => ({id, type:'court', texte, points, options:[], correct:0, accept: accept||'', img: img||''});
   const info = (id, texte, img) => ({id, type:'info', texte, points:0, options:[], correct:0, accept:'', img: img||''});
   return [
+    info('a0i', "INSTRUCTIONS\nThis exam has 3 activities (8 + 7 + 5 = 20 marks in total): directions on a map, daily routine pictures, and writing. Type your answers."),
     info('a1i', "ACTIVITY 1 — DIRECTIONS (8 marks)\nYou are at START (S). You are going to the place with the red pin. Follow the numbered arrows on the map. Write the direction for each arrow. Then say where the place is.\n\nWord bank: take the first left · turn right · go past · take the second right · turn left · go straight on · take the first right · take the second left", I.map),
     q('a1q1', 'Arrow 1 — write the direction.', 1, 'go straight on'),
     q('a1q2', 'Arrow 2 — write the direction.', 1, 'go past; go straight on'),
